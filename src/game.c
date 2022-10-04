@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <float.h>
+#include <assert.h>
 
 #define KEY_UP 265
 #define KEY_DOWN 264
@@ -12,11 +13,11 @@
 
 #define TWO_PI 2*PI
 
-#define TILE_SIZE 32
+#define TILE_SIZE 48
 #define MAP_NUM_ROWS 13
 #define MAP_NUM_COLS 20
 
-#define MINIMAP_SCALE_FACTOR 0.20
+#define MINIMAP_SCALE_FACTOR 0.50
 
 #define WINDOW_WIDTH (MAP_NUM_COLS * TILE_SIZE)
 #define WINDOW_HEIGHT (MAP_NUM_ROWS * TILE_SIZE)
@@ -30,10 +31,12 @@
 #define NUM_RAYS WINDOW_WIDTH
 #define MAX_WALLS_TRAVERSED_PER_RAY 10
 
-#define FPS 90
+#define FPS 100
+
+#define TOTAL_PORTALS 2
 
 const int map[MAP_NUM_ROWS][MAP_NUM_COLS] = {
-    { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+    { 1, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
     { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
     { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
     { 1, 0, 0, 0, 1, 0, 2, 0, 2, 0, 2, 0, 0, 0, 2, 0, 2, 0, 0, 1 },
@@ -45,7 +48,7 @@ const int map[MAP_NUM_ROWS][MAP_NUM_COLS] = {
     { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1 },
     { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1 },
     { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
-    { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
+    { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1 }
 };
 
 struct Player
@@ -66,6 +69,8 @@ struct WallHit
 {
     int wallGridIndexX;
     int wallGridIndexY;
+    float rayOriginX;
+    float rayOriginY;
     float wallHitX;
     float wallHitY;
     float distance;
@@ -92,6 +97,18 @@ typedef struct
     uint32_t * texture_buffer;
 }
 texture_t;
+
+typedef struct Portal
+{
+    int gridIndexX;
+    int gridIndexY;
+}
+portal_t;
+
+portal_t portals[TOTAL_PORTALS] = {
+    { .gridIndexX = 1, .gridIndexY = 0 },
+    { .gridIndexX = 18, .gridIndexY = 12 }
+};
 
 Image windowBuffer = { 0 };
 Texture2D windowTexture = { 0 };
@@ -137,6 +154,35 @@ bool MapHasWallAt(float x, float y)
     int mapGridIndexX = floor(x / TILE_SIZE);
     int mapGridIndexY = floor(y / TILE_SIZE);
     return map[mapGridIndexY][mapGridIndexX] != 0;
+}
+
+portal_t* GetPortalAtGridPosition(int x, int y)
+{
+    for (int i=0; i < TOTAL_PORTALS; i++)
+    {
+        if ((portals[i].gridIndexX == x) && (portals[i].gridIndexY == y))
+        {
+            return &portals[i];
+        }
+    }
+
+    // No portal found at the given position of the map grid
+    return NULL;
+}
+
+portal_t* GetDestinationPortalFromSourcePortal(portal_t *sourcePortal)
+{
+    for (int i=0; i < TOTAL_PORTALS; i++)
+    {
+        // Return the other portal
+        if (&portals[i] != sourcePortal)
+        {
+            return &portals[i];
+        }
+    }
+
+    // No destination portal found
+    return NULL;
 }
 
 void MovePlayer(float deltaTime)
@@ -238,6 +284,9 @@ void CastRay(float rayAngle, int stripId)
     float nextVertTouchX = xinterceptVert;
     float nextVertTouchY = yinterceptVert;
 
+    bool rayIsCrossingPortal = false;
+    float additionalDistance = 0.0f;
+
     while (!rayCastingFinished)
     {
 
@@ -246,19 +295,21 @@ void CastRay(float rayAngle, int stripId)
         float horzWallHitX = 0;
         float horzWallHitY = 0;
         int horzWallContent = 0;
+        float horzXToCheck = 0;
+        float horzYToCheck = 0;
 
        	// Increment xstepHorz and ystepHorz until we find a wall
         while (!foundHorzWallHit && nextHorzTouchX >= 0 && nextHorzTouchX <= WINDOW_WIDTH && nextHorzTouchY >= 0 && nextHorzTouchY <= WINDOW_HEIGHT)
         {
-            float xToCheck = nextHorzTouchX;
-            float yToCheck = nextHorzTouchY + (isRayFacingUp ? -1 : 0);
+            horzXToCheck = nextHorzTouchX;
+            horzYToCheck = nextHorzTouchY + (isRayFacingUp ? -1 : 0);
 
-            if (MapHasWallAt(xToCheck, yToCheck))
+            if (MapHasWallAt(horzXToCheck, horzYToCheck))
             {
                	// found a wall hit
                 horzWallHitX = nextHorzTouchX;
                 horzWallHitY = nextHorzTouchY;
-                horzWallContent = map[(int) floor(yToCheck / TILE_SIZE)][(int) floor(xToCheck / TILE_SIZE)];
+                horzWallContent = map[(int) floor(horzYToCheck / TILE_SIZE)][(int) floor(horzXToCheck / TILE_SIZE)];
                 foundHorzWallHit = true;
                 break;
             }
@@ -272,19 +323,21 @@ void CastRay(float rayAngle, int stripId)
         float vertWallHitX = 0;
         float vertWallHitY = 0;
         int vertWallContent = 0;
+        float vertXToCheck = 0;
+        float vertYToCheck = 0;
 
        	// Increment xstepVert and ystepVert until we find a wall
         while (!foundVertWallHit && nextVertTouchX >= 0 && nextVertTouchX <= WINDOW_WIDTH && nextVertTouchY >= 0 && nextVertTouchY <= WINDOW_HEIGHT)
         {
-            float xToCheck = nextVertTouchX + (isRayFacingLeft ? -1 : 0);
-            float yToCheck = nextVertTouchY;
+            vertXToCheck = nextVertTouchX + (isRayFacingLeft ? -1 : 0);
+            vertYToCheck = nextVertTouchY;
 
-            if (MapHasWallAt(xToCheck, yToCheck))
+            if (MapHasWallAt(vertXToCheck, vertYToCheck))
             {
                	// found a wall hit
                 vertWallHitX = nextVertTouchX;
                 vertWallHitY = nextVertTouchY;
-                vertWallContent = map[(int) floor(yToCheck / TILE_SIZE)][(int) floor(xToCheck / TILE_SIZE)];
+                vertWallContent = map[(int) floor(vertYToCheck / TILE_SIZE)][(int) floor(vertXToCheck / TILE_SIZE)];
                 foundVertWallHit = true;
                 break;
             }
@@ -295,52 +348,104 @@ void CastRay(float rayAngle, int stripId)
 
        	// Calculate both horizontal and vertical hit distances and choose the smallest one
         float horzHitDistance = foundHorzWallHit ?
-            distanceBetweenPoints(player.x, player.y, horzWallHitX, horzWallHitY, true) :
+            distanceBetweenPoints(x, y, horzWallHitX, horzWallHitY, true) :
             FLT_MAX;
         float vertHitDistance = foundVertWallHit ?
-            distanceBetweenPoints(player.x, player.y, vertWallHitX, vertWallHitY, true) :
+            distanceBetweenPoints(x, y, vertWallHitX, vertWallHitY, true) :
             FLT_MAX;
 
         if (vertHitDistance < horzHitDistance)
         {
-            rays[stripId].walls[wallsTraversedCount].wallGridIndexX = floor(vertWallHitX / TILE_SIZE);
-            rays[stripId].walls[wallsTraversedCount].wallGridIndexY = floor(vertWallHitY / TILE_SIZE);
-            rays[stripId].walls[wallsTraversedCount].distance = vertHitDistance;
+            rays[stripId].walls[wallsTraversedCount].wallGridIndexX = (int) floor(vertXToCheck / TILE_SIZE);
+            rays[stripId].walls[wallsTraversedCount].wallGridIndexY =  (int) floor(vertYToCheck / TILE_SIZE);
+            rays[stripId].walls[wallsTraversedCount].distance = vertHitDistance + additionalDistance;
             rays[stripId].walls[wallsTraversedCount].wallHitX = vertWallHitX;
             rays[stripId].walls[wallsTraversedCount].wallHitY = vertWallHitY;
             rays[stripId].walls[wallsTraversedCount].wallHitContent = vertWallContent;
             rays[stripId].walls[wallsTraversedCount].wasHitVertical = true;
-            x = vertWallHitX;
-            y = vertWallHitY;
 
             nextVertTouchX += xstepVert;
             nextVertTouchY += ystepVert;
         }
         else
         {
-            rays[stripId].walls[wallsTraversedCount].wallGridIndexX = floor(horzWallHitX / TILE_SIZE);
-            rays[stripId].walls[wallsTraversedCount].wallGridIndexY = floor(horzWallHitY / TILE_SIZE);
-            rays[stripId].walls[wallsTraversedCount].distance = horzHitDistance;
+            rays[stripId].walls[wallsTraversedCount].wallGridIndexX =  (int) floor(horzXToCheck / TILE_SIZE);
+            rays[stripId].walls[wallsTraversedCount].wallGridIndexY = (int) floor(horzYToCheck / TILE_SIZE);
+            rays[stripId].walls[wallsTraversedCount].distance = horzHitDistance + additionalDistance;
             rays[stripId].walls[wallsTraversedCount].wallHitX = horzWallHitX;
             rays[stripId].walls[wallsTraversedCount].wallHitY = horzWallHitY;
             rays[stripId].walls[wallsTraversedCount].wallHitContent = horzWallContent;
             rays[stripId].walls[wallsTraversedCount].wasHitVertical = false;
-            x = horzWallHitX;
-            y = horzWallHitY;
 
             nextHorzTouchX += xstepHorz;
             nextHorzTouchY += ystepHorz;
         }
 
+        rays[stripId].walls[wallsTraversedCount].rayOriginX = x;
+        rays[stripId].walls[wallsTraversedCount].rayOriginY = y;
+
         int wallHitType = rays[stripId].walls[wallsTraversedCount].wallHitContent;
 
-        wallsTraversedCount++;
+        // Discard store the wall hit inside a portal tile
+        if (rayIsCrossingPortal)
+        {
+            rayIsCrossingPortal = false;
+            continue;
+        }
 
-       	// Walls of type 2 are translucid walls
-        if ((wallHitType != 2) || (wallsTraversedCount >= MAX_WALLS_TRAVERSED_PER_RAY))
+        //if (stripId == 0)
+        //{
+        //    printf("(x:%f) (y:%f) (wallsTraversedCount:%d) (colission:%f,%f) (content:%d) (distance:%f)\n", x, y, wallsTraversedCount, rays[stripId].walls[wallsTraversedCount].wallHitX, rays[stripId].walls[wallsTraversedCount].wallHitY, wallHitType, rays[stripId].walls[wallsTraversedCount].distance);
+        //}
+
+       	// Walls of type 2 are translucid walls. Walls of type 3 are portals.
+        if (((wallHitType != 2) && (wallHitType != 3)) || (wallsTraversedCount + 1 >= MAX_WALLS_TRAVERSED_PER_RAY))
         {
             rayCastingFinished = true;
         }
+        else if (wallHitType == 3)
+        {
+            // A portal wall appeared in the viewport
+            int wallGridIndexX = rays[stripId].walls[wallsTraversedCount].wallGridIndexX;
+            int wallGridIndexY = rays[stripId].walls[wallsTraversedCount].wallGridIndexY;
+
+            portal_t *sourcePortal = GetPortalAtGridPosition(wallGridIndexX, wallGridIndexY);
+            assert (sourcePortal != NULL);
+            portal_t *destinationPortal = GetDestinationPortalFromSourcePortal(sourcePortal);
+            assert (destinationPortal != NULL);
+
+            float wallHitX = rays[stripId].walls[wallsTraversedCount].wallHitX;
+            float wallHitY = rays[stripId].walls[wallsTraversedCount].wallHitY;
+
+            // Set the current position of the player in the destination portal
+            x = (destinationPortal->gridIndexX * TILE_SIZE) + fmodf(wallHitX, TILE_SIZE);
+            y = (destinationPortal->gridIndexY + 1) * TILE_SIZE;
+
+            // Find the y-coordinate of the closest horizontal grid intersection
+            yinterceptHorz = floor(y / TILE_SIZE) *TILE_SIZE;
+            yinterceptHorz += isRayFacingDown ? TILE_SIZE : 0;
+
+            // Find the x-coordinate of the closest horizontal grid intersection
+            xinterceptHorz = x + (yinterceptHorz - y) / tan(rayAngle);
+
+            nextHorzTouchX = xinterceptHorz;
+            nextHorzTouchY = yinterceptHorz;
+
+            // Find the x-coordinate of the closest vertical grid intersection
+            xinterceptVert = floor(x / TILE_SIZE) *TILE_SIZE;
+            xinterceptVert += isRayFacingRight ? TILE_SIZE : 0;
+
+            // Find the y-coordinate of the closest vertical grid intersection
+            yinterceptVert = y + (xinterceptVert - x) *tan(rayAngle);
+
+            nextVertTouchX = xinterceptVert;
+            nextVertTouchY = yinterceptVert;
+
+            additionalDistance += rays[stripId].walls[wallsTraversedCount].distance;
+            rayIsCrossingPortal = true;
+        }
+
+        wallsTraversedCount++;
     }
 
     rays[stripId].rayAngle = rayAngle;
@@ -381,6 +486,9 @@ void RenderMap()
                 case 2:
                     tileColor = (Color){ 0, 0, 200, 255 };
                     break;
+                case 3:
+                    tileColor = (Color){ 200, 0, 0, 255 };
+                    break;
             }
 
             DrawRectangle(tileX *MINIMAP_SCALE_FACTOR,
@@ -407,8 +515,17 @@ void RenderRays()
                 endX,
                 endY,
                 j == 0 ? DARKGREEN : GREEN);
-            startX = endX;
-            startY = endY;
+
+            if ((rays[i].walls[j].wallHitContent == 3) && (j+1 < rays[i].wallsTraversedCount))
+            {
+                startX = MINIMAP_SCALE_FACTOR * rays[i].walls[j+1].rayOriginX;
+                startY = MINIMAP_SCALE_FACTOR * rays[i].walls[j+1].rayOriginY;
+            }
+            else
+            {
+                startX = endX;
+                startY = endY;
+            }
         }
     }
 }
@@ -513,34 +630,39 @@ void Generate3DProjection()
             int wallBottomPixel = (WINDOW_HEIGHT / 2) + (wallStripHeight / 2);
             wallBottomPixel = wallBottomPixel > WINDOW_HEIGHT ? WINDOW_HEIGHT : wallBottomPixel;
 
+            bool rayHitPortal = rays[i].walls[w].wallHitContent == 3;
             int pixelAddr;
+
+            //if (i == 0)
+            //{
+            //    printf("(wall:%d) (wallTopPixel:%d) (wallBottomPixel:%d)\n", w, wallTopPixel, wallBottomPixel);
+            //}
 
            	// set the color of the ceiling
             for (int y = 0; y < wallTopPixel; y++)
             {
                 pixelAddr = (WINDOW_WIDTH *y) + i;
-
-                if (w == 0) SetPixelColorWindowBuffer(0xC8333333, pixelAddr, true);
-                else MixPixelColorWindowBuffer(0xC8333333, pixelAddr, false);
+                SetPixelColorWindowBuffer(0xC8333333, pixelAddr, true);
             }
 
-           	// render the wall from wallTopPixel to wallBottomPixel
-            for (int y = wallTopPixel; y < wallBottomPixel; y++)
+            if (!rayHitPortal)
             {
-                pixelAddr = (WINDOW_WIDTH *y) + i;
-                uint32_t wallPixelColor = rays[i].walls[w].wasHitVertical ? 0xC8FFFFFF : 0xC8CCCCCC;
+                // render the wall from wallTopPixel to wallBottomPixel
+                for (int y = wallTopPixel; y < wallBottomPixel; y++)
+                {
+                    pixelAddr = (WINDOW_WIDTH *y) + i;
+                    uint32_t wallPixelColor = rays[i].walls[w].wasHitVertical ? 0xC8FFFFFF : 0xC8CCCCCC;
 
-                if (isFarthestWall) SetPixelColorWindowBuffer(wallPixelColor, pixelAddr, w == 0);
-                else MixPixelColorWindowBuffer(wallPixelColor, pixelAddr, w == 0);
+                    if (isFarthestWall) SetPixelColorWindowBuffer(wallPixelColor, pixelAddr, w == 0);
+                    else MixPixelColorWindowBuffer(wallPixelColor, pixelAddr, w == 0);
+                }
             }
 
            	// set the color of the floor
             for (int y = wallBottomPixel; y < WINDOW_HEIGHT; y++)
             {
                 pixelAddr = (WINDOW_WIDTH *y) + i;
-
-                if (w == 0) SetPixelColorWindowBuffer(0xC8777777, pixelAddr, true);
-                else MixPixelColorWindowBuffer(0xC8777777, pixelAddr, false);
+                SetPixelColorWindowBuffer(0xC8777777, pixelAddr, true);
             }
 
             isFarthestWall = false;
@@ -571,18 +693,18 @@ static void RenderFrame(void)
     Generate3DProjection();
     RenderWindowBuffer();
     ClearWindowBuffer(0xFF000000);
-    //RenderMap();
-    //RenderRays();
-    //RenderPlayer();
-    DrawFPS(10, 10);
+    RenderMap();
+    RenderRays();
+    RenderPlayer();
+    DrawFPS(850, 10);
     EndDrawing();
 }
 
 int main(void)
 {
     SetTraceLogLevel(4);
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ray casting");
-   	//SetTargetFPS(FPS);
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ray caster v0.1.0");
+   	SetTargetFPS(FPS);
     Setup();
 
     while (!WindowShouldClose())	// Detect window close button or ESC key
