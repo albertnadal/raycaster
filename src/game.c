@@ -62,6 +62,7 @@ struct Player
     float rotationAngle;
     float walkSpeed;
     float turnSpeed;
+    bool isCrossingPortal;
 }
 player;
 
@@ -130,6 +131,7 @@ void Setup()
     player.rotationAngle = PI;
     player.walkSpeed = 200;
     player.turnSpeed = 110 *(PI / 180);
+    player.isCrossingPortal = false;
 
    	// Initialize the window buffer
     windowBuffer.width = WINDOW_WIDTH;
@@ -154,6 +156,17 @@ bool MapHasWallAt(float x, float y)
     int mapGridIndexX = floor(x / TILE_SIZE);
     int mapGridIndexY = floor(y / TILE_SIZE);
     return map[mapGridIndexY][mapGridIndexX] != 0;
+}
+
+int GetMapWallTypeAt(float x, float y)
+{
+    if (x < 0 || x > WINDOW_WIDTH || y < 0 || y > WINDOW_HEIGHT)
+    {
+        return 1;
+    }
+    int mapGridIndexX = floor(x / TILE_SIZE);
+    int mapGridIndexY = floor(y / TILE_SIZE);
+    return map[mapGridIndexY][mapGridIndexX];
 }
 
 portal_t* GetPortalAtGridPosition(int x, int y)
@@ -193,10 +206,34 @@ void MovePlayer(float deltaTime)
     float newPlayerX = player.x + cos(player.rotationAngle) *moveStep;
     float newPlayerY = player.y + sin(player.rotationAngle) *moveStep;
 
-    if (!MapHasWallAt(newPlayerX, newPlayerY))
+    int wallType = GetMapWallTypeAt(newPlayerX, newPlayerY);
+    if (wallType == 0)
     {
         player.x = newPlayerX;
         player.y = newPlayerY;
+        player.isCrossingPortal = false;
+    }
+    else if (player.isCrossingPortal && (wallType == 3))
+    {
+        player.x = newPlayerX;
+        player.y = newPlayerY;
+    }
+    else if (!player.isCrossingPortal && (wallType == 3))
+    {
+        // Player is crossing a portal
+        int portalGridIndexX = floor(newPlayerX / TILE_SIZE);
+        int portalGridIndexY = floor(newPlayerY / TILE_SIZE);
+
+        portal_t *sourcePortal = GetPortalAtGridPosition(portalGridIndexX, portalGridIndexY);
+        assert (sourcePortal != NULL);
+        portal_t *destinationPortal = GetDestinationPortalFromSourcePortal(sourcePortal);
+        assert (destinationPortal != NULL);
+
+        // Set the new position of the player in the destination portal
+        player.x = (destinationPortal->gridIndexX * TILE_SIZE) + fmodf(newPlayerX, TILE_SIZE);
+        player.y = ((destinationPortal->gridIndexY + 1) * TILE_SIZE) + sin(player.rotationAngle) *moveStep;;
+
+        player.isCrossingPortal = true;
     }
 }
 
@@ -632,11 +669,6 @@ void Generate3DProjection()
 
             bool rayHitPortal = rays[i].walls[w].wallHitContent == 3;
             int pixelAddr;
-
-            //if (i == 0)
-            //{
-            //    printf("(wall:%d) (wallTopPixel:%d) (wallBottomPixel:%d)\n", w, wallTopPixel, wallBottomPixel);
-            //}
 
            	// set the color of the ceiling
             for (int y = 0; y < wallTopPixel; y++)
